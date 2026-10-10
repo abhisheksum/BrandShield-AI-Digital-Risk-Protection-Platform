@@ -4,9 +4,9 @@ import type { AppUser, Brand, HealthStatus, OfficialAsset } from '../types';
 const configuredApiUrl = (import.meta as ImportMeta & { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
 const productionApiUrl = 'https://rakshak-ai-digital-risk-protection.onrender.com/api';
 
-function normalizeApiBaseUrl(value?: string) {
+export function normalizeApiBaseUrl(value?: string, isProduction = import.meta.env.PROD) {
   let candidate = value?.trim();
-  if (!candidate) candidate = import.meta.env.PROD ? productionApiUrl : '/api';
+  if (!candidate) candidate = isProduction ? productionApiUrl : '/api';
 
   // Netlify environment exports can be copied with a display prefix or quotes.
   candidate = candidate.replace(/^value\s+/i, '').replace(/^['"]|['"]$/g, '').trim();
@@ -139,7 +139,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseArrayResponse<T>(
+export function parseArrayResponse<T>(
   response: AxiosResponse<unknown>,
   endpoint: string,
   isItem: (value: unknown) => value is T,
@@ -150,7 +150,7 @@ function parseArrayResponse<T>(
   return response as AxiosResponse<T[]>;
 }
 
-function parseObjectResponse<T>(
+export function parseObjectResponse<T>(
   response: AxiosResponse<unknown>,
   endpoint: string,
   isItem: (value: unknown) => value is T,

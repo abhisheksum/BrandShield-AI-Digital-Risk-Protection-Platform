@@ -99,6 +99,8 @@ async def trigger_scan(request: ScanTriggerRequest, db: Session = Depends(get_db
                     description=cand.get("description"),
                     risk_score=score,
                     severity=risk_result["severity"],
+                    confidence=risk_result.get("confidence", "medium"),
+                    recommended_action=risk_result.get("recommended_action"),
                     structured_evidence=json.dumps(risk_result),
                     status="new",
                     is_demo=1 if cand.get("is_demo") else 0
@@ -106,10 +108,19 @@ async def trigger_scan(request: ScanTriggerRequest, db: Session = Depends(get_db
                 db.add(alert)
                 alerts_created += 1
 
-    # Finalize scan status
+    # Finalize scan status based on collector health
     scan.total_candidates = len(all_candidates)
     scan.alerts_generated = alerts_created
-    scan.status = "completed"
+
+    # Evaluate overall scan status: completed, partial, or failed
+    statuses = [s.get("status") for s in source_statuses.values()]
+    if all(st == "completed" for st in statuses):
+        scan.status = "completed"
+    elif any(st == "completed" for st in statuses):
+        scan.status = "partial"
+    else:
+        scan.status = "failed"
+
     scan.source_summary = json.dumps(source_statuses)
     scan.completed_at = datetime.now(timezone.utc)
     

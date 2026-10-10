@@ -6,11 +6,12 @@ from app.main import app
 client = TestClient(app)
 
 def test_health_check():
-    response = client.get("/health")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "healthy"
-    assert "BrandShield AI" in data["service"]
+    for endpoint in ["/health", "/api/health"]:
+        response = client.get(endpoint)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert "BrandShield AI" in data["service"]
 
 def test_create_and_query_brand():
     unique_name = f"CloudSecure_{uuid.uuid4().hex[:6]}"

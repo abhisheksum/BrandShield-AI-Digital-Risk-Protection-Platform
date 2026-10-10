@@ -33,6 +33,14 @@ class Alert(Base):
     status = Column(String(50), nullable=False, default="new")
     resolution_notes = Column(Text, nullable=True)
     
+    # Unified Threat Engine Extensions
+    confidence = Column(String(20), nullable=False, default="medium")  # "high", "medium", "low"
+    recommended_action = Column(Text, nullable=True)
+    analyst_name = Column(String(255), nullable=True)
+    investigation_notes = Column(Text, nullable=True)
+    status_changed_at = Column(DateTime, nullable=True)
+    dismissed_at = Column(DateTime, nullable=True)
+    
     # Metadata
     is_demo = Column(Integer, default=0)  # 1 for synthetic demo, 0 for live
     created_at = Column(DateTime, default=utc_now)

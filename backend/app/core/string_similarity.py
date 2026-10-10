@@ -1,26 +1,99 @@
 from rapidfuzz import fuzz, distance
-from typing import Dict, Any
-from app.core.normalization import normalize_text
+from typing import Dict, Any, List
+import re
+from app.core.normalization import normalize_text, extract_tokens
+
+COMMON_SUSPICIOUS_WORDS = {
+    "official", "support", "help", "helpdesk", "care", "service", "desk", 
+    "verify", "verified", "security", "team", "global", "agent", "auth",
+    "login", "portal", "bonus", "reward", "giveaway", "claim", "free",
+    "wallet", "admin", "direct", "fast", "urgent", "update", "recovery"
+}
+
+def analyze_character_variations(target: str, candidate: str) -> Dict[str, Any]:
+    """
+    Analyzes specific string differences between target and candidate:
+    - insertions: extra characters added into the word
+    - deletions: missing characters from target
+    - swaps / transpositions: adjacent character swaps
+    - added_words: extra vocabulary attached to the brand name
+    - punctuation_changes: dots, underscores, hyphens inserted to bypass filters
+    """
+    norm_t = normalize_text(target)
+    norm_c = normalize_text(candidate)
+
+    compact_t = re.sub(r'[^a-z0-9]', '', norm_t)
+    compact_c = re.sub(r'[^a-z0-9]', '', norm_c)
+
+    # 1. Added words detection
+    tokens_t = extract_tokens(target)
+    tokens_c = extract_tokens(candidate)
+    added_tokens = tokens_c - tokens_t
+    suspicious_added = [tok for tok in added_tokens if tok in COMMON_SUSPICIOUS_WORDS]
+
+    # 2. Levenshtein edit distance & character variations
+    edit_ops = distance.Levenshtein.editops(compact_t, compact_c)
+    insertions = 0
+    deletions = 0
+    substitutions = 0
+
+    for op in edit_ops:
+        tag = op[0]
+        if tag == 'insert':
+            insertions += 1
+        elif tag == 'delete':
+            deletions += 1
+        elif tag == 'replace':
+            substitutions += 1
+
+    # Check for adjacent transposition (e.g. 'tehc' vs 'tech')
+    osa_dist = distance.OSA.distance(compact_t, compact_c)
+    lev_dist = len(edit_ops)
+    swaps = max(0, lev_dist - osa_dist)
+
+    # Punctuation/delimiter insertion (e.g. 'red.shield', 'red_shield')
+    has_delimiter_split = bool(re.search(r'[_\.\-\+]', candidate) and not re.search(r'[_\.\-\+]', target))
+
+    return {
+        "norm_target": norm_t,
+        "norm_candidate": norm_c,
+        "compact_target": compact_t,
+        "compact_candidate": compact_c,
+        "levenshtein_distance": lev_dist,
+        "insertions": insertions,
+        "deletions": deletions,
+        "substitutions": substitutions,
+        "swaps": swaps,
+        "added_tokens": list(added_tokens),
+        "suspicious_added_words": suspicious_added,
+        "has_delimiter_split": has_delimiter_split,
+    }
+
 
 def compute_string_similarity(target_name: str, candidate_name: str) -> Dict[str, Any]:
     """
     Computes multifaceted string similarity between target brand and candidate string.
     Returns:
-    - combined_score: float (0.0 to 100.0)
+    - score: float (0.0 to 100.0)
     - metrics: dictionary with ratio, partial_ratio, token_sort_ratio, token_set_ratio, levenshtein_distance
-    - explanation: string describing patterns (e.g. typosquat, exact match, added words)
+    - variations: specific character mutations (insertion, deletion, swap, added words)
+    - explanation: string describing detection patterns
     """
     if not target_name or not candidate_name:
         return {
             "score": 0.0,
             "metrics": {},
-            "explanation": "Missing name for comparison"
+            "variations": {},
+            "explanation": "Missing string for comparison"
         }
 
-    norm_target = normalize_text(target_name)
-    norm_candidate = normalize_text(candidate_name)
+    variations = analyze_character_variations(target_name, candidate_name)
+    norm_target = variations["norm_target"]
+    norm_candidate = variations["norm_candidate"]
+    compact_t = variations["compact_target"]
+    compact_c = variations["compact_candidate"]
 
-    # If normalized strings are identical -> 100% match
+    # Exact normalized match
     if norm_target == norm_candidate:
         return {
             "score": 100.0,
@@ -30,56 +103,73 @@ def compute_string_similarity(target_name: str, candidate_name: str) -> Dict[str
                 "token_set_ratio": 100.0,
                 "levenshtein_distance": 0
             },
-            "explanation": "Exact normalized string match (including homoglyphs/substitutions)"
+            "variations": variations,
+            "explanation": "Exact normalized string match (including homoglyph/character substitutions)"
         }
 
-    # Remove all spaces for continuous name comparison (e.g., 'brandshield' vs 'brand shield')
-    target_compact = norm_target.replace(" ", "")
-    candidate_compact = norm_candidate.replace(" ", "")
-
     ratio = fuzz.ratio(norm_target, norm_candidate)
-    compact_ratio = fuzz.ratio(target_compact, candidate_compact)
+    compact_ratio = fuzz.ratio(compact_t, compact_c)
     partial_ratio = fuzz.partial_ratio(norm_target, norm_candidate)
     token_sort = fuzz.token_sort_ratio(norm_target, norm_candidate)
     token_set = fuzz.token_set_ratio(norm_target, norm_candidate)
-    lev_dist = distance.Levenshtein.distance(target_compact, candidate_compact)
+    lev_dist = variations["levenshtein_distance"]
 
-    # Check for specific impersonation patterns
     patterns = []
-    
-    # 1. Combosquatting: Target compact is contained entirely within candidate
-    is_contained = target_compact in candidate_compact
-    if is_contained:
-        patterns.append(f"Contains target brand name '{target_name}' with added keywords/affixes")
 
-    # 2. Typosquatting: Small edit distance
-    max_len = max(len(target_compact), len(candidate_compact))
-    if lev_dist <= 2 and max_len >= 4:
-        patterns.append(f"Likely typosquatting / character transposition (edit distance: {lev_dist})")
+    # Combosquatting / Added Words detection
+    is_contained = compact_t in compact_c
+    if is_contained and len(compact_c) > len(compact_t) + 1:
+        if variations["suspicious_added_words"]:
+            patterns.append(f"Combosquatting: target brand name embedded with high-risk words: {', '.join(variations['suspicious_added_words'])}")
+        else:
+            patterns.append(f"Contains target brand name with additional keywords ({', '.join(variations['added_tokens'])})")
 
-    # Weighted string similarity
-    # If the target name is fully embedded inside candidate, token_set / partial ratio is heavily weighted
+    # Character mutations / Typosquatting
+    if lev_dist <= 2 and len(compact_t) >= 4 and not is_contained:
+        patterns.append(f"Likely typosquatting / character mutation (edit distance: {lev_dist})")
+    elif is_contained and len(compact_c) <= len(compact_t) + 1:
+        patterns.append(f"Likely typosquatting / character repetition (similarity: {ratio}%)")
+    elif variations["swaps"] > 0:
+        patterns.append(f"Character swap/transposition detected ({variations['swaps']} swap)")
+    if variations["substitutions"] > 0 and lev_dist <= 2:
+        patterns.append(f"Character substitution detected ({variations['substitutions']} char)")
+    if variations["insertions"] > 0 and lev_dist <= 3 and not is_contained:
+        patterns.append(f"Character insertion detected ({variations['insertions']} char)")
+    if variations["deletions"] > 0 and lev_dist <= 2:
+        patterns.append(f"Character omission/deletion detected ({variations['deletions']} char)")
+    if variations["has_delimiter_split"]:
+        patterns.append("Punctuation/delimiter insertion to bypass keyword filters")
+
+    # Calculate weighted composite score
     if is_contained:
-        score = max(token_set * 0.9, partial_ratio * 0.85, compact_ratio)
-    elif lev_dist <= 2 and max_len >= 4:
-        score = max(compact_ratio, ratio, 85.0 - (lev_dist * 5.0))
+        # If target brand is completely contained, base similarity starts high
+        base_score = max(75.0, 0.4 * compact_ratio + 0.3 * partial_ratio + 0.3 * token_set)
+        if variations["suspicious_added_words"]:
+            base_score = min(98.0, base_score + 10.0)
+    elif lev_dist <= 2 and len(compact_t) >= 4:
+        # Typosquat / single character mutation
+        base_score = max(80.0, compact_ratio)
     else:
-        # Standard weighted composite
-        score = (compact_ratio * 0.4) + (token_sort * 0.3) + (token_set * 0.3)
+        base_score = (
+            0.25 * ratio +
+            0.25 * compact_ratio +
+            0.25 * token_sort +
+            0.25 * token_set
+        )
 
-    score = min(100.0, max(0.0, round(float(score), 2)))
-
-    explanation = "; ".join(patterns) if patterns else f"Fuzzy string similarity of {score}%"
+    score = round(min(100.0, max(0.0, base_score)), 1)
+    explanation = "; ".join(patterns) if patterns else f"Fuzzy lexical match of {score}%"
 
     return {
         "score": score,
         "metrics": {
-            "ratio": round(ratio, 2),
-            "compact_ratio": round(compact_ratio, 2),
-            "partial_ratio": round(partial_ratio, 2),
-            "token_sort_ratio": round(token_sort, 2),
-            "token_set_ratio": round(token_set, 2),
-            "levenshtein_distance": lev_dist
+            "ratio": round(ratio, 1),
+            "compact_ratio": round(compact_ratio, 1),
+            "partial_ratio": round(partial_ratio, 1),
+            "token_sort_ratio": round(token_sort, 1),
+            "token_set_ratio": round(token_set, 1),
+            "levenshtein_distance": lev_dist,
         },
+        "variations": variations,
         "explanation": explanation
     }

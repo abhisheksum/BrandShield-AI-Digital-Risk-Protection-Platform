@@ -5,7 +5,7 @@ from app.models.brand import OfficialAsset
 from app.core.normalization import normalize_text
 
 def clean_url(url: Optional[str]) -> str:
-    """Normalize canonical URL for deterministic comparison."""
+    """Normalize canonical URL for deterministic comparison, including critical query parameters like app id."""
     if not url:
         return ""
     try:
@@ -14,6 +14,12 @@ def clean_url(url: Optional[str]) -> str:
         if netloc.startswith("www."):
             netloc = netloc[4:]
         path = parsed.path.rstrip("/").lower()
+        query = parsed.query.lower()
+        if query:
+            # Sort query parameters deterministically
+            query_pairs = sorted(urllib.parse.parse_qsl(query))
+            sorted_query = urllib.parse.urlencode(query_pairs)
+            return f"{netloc}{path}?{sorted_query}"
         return f"{netloc}{path}"
     except Exception:
         return url.strip().lower()

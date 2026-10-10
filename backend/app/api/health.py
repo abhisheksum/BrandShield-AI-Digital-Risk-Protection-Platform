@@ -4,6 +4,7 @@ from app.config import settings
 router = APIRouter(tags=["Health"])
 
 @router.get("/health")
+@router.get("/api/health")
 def health_check():
     return {
         "status": "healthy",

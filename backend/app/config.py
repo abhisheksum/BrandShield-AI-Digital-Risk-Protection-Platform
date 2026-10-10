@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     HIGH_RISK_THRESHOLD: float = 65.0
     MEDIUM_RISK_THRESHOLD: float = 45.0
 
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://rakshak014.netlify.app",
+    ]
 
 settings = Settings()

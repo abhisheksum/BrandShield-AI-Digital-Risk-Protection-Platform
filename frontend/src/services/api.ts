@@ -1,7 +1,35 @@
 import axios, { type AxiosResponse } from 'axios';
 import type { AppUser, Brand, HealthStatus, OfficialAsset } from '../types';
 
-const apiBaseUrl = (import.meta as ImportMeta & { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || '/api';
+const configuredApiUrl = (import.meta as ImportMeta & { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
+const productionApiUrl = 'https://rakshak-ai-digital-risk-protection.onrender.com/api';
+
+function normalizeApiBaseUrl(value?: string) {
+  let candidate = value?.trim();
+  if (!candidate) candidate = import.meta.env.PROD ? productionApiUrl : '/api';
+
+  // Netlify environment exports can be copied with a display prefix or quotes.
+  candidate = candidate.replace(/^value\s+/i, '').replace(/^['"]|['"]$/g, '').trim();
+  if (!candidate) throw new Error('VITE_API_URL is empty after normalization');
+
+  if (candidate.startsWith('/')) {
+    return candidate.replace(/\/+$/, '') || '/api';
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error('VITE_API_URL must be an absolute URL or a /api-relative path');
+  }
+  const path = parsed.pathname.replace(/\/+$/, '');
+  parsed.pathname = path === '/api' || path.endsWith('/api') ? path : `${path}/api`;
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+export const apiBaseUrl = normalizeApiBaseUrl(configuredApiUrl);
 
 const api = axios.create({
   baseURL: apiBaseUrl,
@@ -18,6 +46,30 @@ export type ApiError = {
   };
   message?: string;
 };
+
+export class ApiResponseError extends Error {
+  readonly kind = 'response';
+  constructor(
+    readonly endpoint: string,
+    received: unknown,
+    expected = 'an array',
+  ) {
+    const shape = Array.isArray(received) ? 'array' : received === null ? 'null' : typeof received;
+    super(`Invalid response from ${endpoint}: expected ${expected}, received ${shape}`);
+    this.name = 'ApiResponseError';
+  }
+}
+
+export function describeApiError(error: unknown) {
+  if (error instanceof ApiResponseError) return error.message;
+  if (axios.isAxiosError(error)) {
+    if (error.response) {
+      return `HTTP ${error.response.status} from ${error.config?.url || 'Rakshak API'}`;
+    }
+    return `Network error contacting Rakshak API: ${error.message}`;
+  }
+  return error instanceof Error ? error.message : 'Unknown Rakshak API error';
+}
 
 export type ApiResponse<T> = AxiosResponse<T>;
 
@@ -83,7 +135,53 @@ export const registerUser = (data: RegisterPayload) => api.post<AuthResponse>('/
 export const loginUser = (data: AuthPayload) => api.post<AuthResponse>('/auth/login', data);
 export const getMe = () => api.get<AppUser>('/auth/me');
 
-export const getBrands = () => api.get<Brand[]>('/brands');
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseArrayResponse<T>(
+  response: AxiosResponse<unknown>,
+  endpoint: string,
+  isItem: (value: unknown) => value is T,
+): AxiosResponse<T[]> {
+  if (!Array.isArray(response.data) || !response.data.every(isItem)) {
+    throw new ApiResponseError(endpoint, response.data);
+  }
+  return response as AxiosResponse<T[]>;
+}
+
+function parseObjectResponse<T>(
+  response: AxiosResponse<unknown>,
+  endpoint: string,
+  isItem: (value: unknown) => value is T,
+): AxiosResponse<T> {
+  if (!isItem(response.data)) {
+    throw new ApiResponseError(endpoint, response.data, 'an object');
+  }
+  return response as AxiosResponse<T>;
+}
+
+function isBrand(value: unknown): value is Brand {
+  return isRecord(value) && typeof value.id === 'number' && typeof value.name === 'string' &&
+    Array.isArray(value.official_assets) && value.official_assets.every(isOfficialAsset);
+}
+
+function isOfficialAsset(value: unknown): value is OfficialAsset {
+  return isRecord(value) && typeof value.id === 'number' && typeof value.brand_id === 'number' &&
+    typeof value.identifier === 'string';
+}
+
+function isAlert(value: unknown): value is import('../types').ThreatAlert {
+  return isRecord(value) && typeof value.id === 'number' && typeof value.brand_id === 'number' &&
+    typeof value.candidate_name === 'string' && typeof value.structured_evidence === 'object';
+}
+
+function isScan(value: unknown): value is import('../types').ScanAudit {
+  return isRecord(value) && typeof value.id === 'number' && typeof value.brand_id === 'number' &&
+    typeof value.scan_type === 'string' && typeof value.status === 'string';
+}
+
+export const getBrands = () => api.get<unknown>('/brands').then((response) => parseArrayResponse(response, '/brands', isBrand));
 export const getBrand = (id: number) => api.get<Brand>(`/brands/${id}`);
 export const createBrand = (data: Partial<Brand>) => api.post<Brand>('/brands', data);
 export const updateBrand = (id: number, data: Partial<Brand>) => api.put<Brand>(`/brands/${id}`, data);
@@ -101,16 +199,22 @@ export const uploadBrandLogo = (id: number, file: File) => {
 
 export const addOfficialAsset = (brandId: number, data: Partial<OfficialAsset>) =>
   api.post(`/brands/${brandId}/assets`, data);
-export const getOfficialAssets = (brandId: number) => api.get(`/brands/${brandId}/assets`);
+export const getOfficialAssets = (brandId: number) =>
+  api.get<unknown>(`/brands/${brandId}/assets`).then((response) =>
+    parseArrayResponse(response, `/brands/${brandId}/assets`, isOfficialAsset));
 export const updateOfficialAsset = (assetId: number, data: Partial<OfficialAsset>) =>
   api.put(`/brands/assets/${assetId}`, data);
 export const deleteOfficialAsset = (assetId: number) => api.delete(`/brands/assets/${assetId}`);
 
-export const triggerScan = (data: ScanRequest) => api.post('/scans', data);
-export const getScans = (brandId: number) => api.get('/scans', { params: { brand_id: brandId } });
+export const triggerScan = (data: ScanRequest) =>
+  api.post<unknown>('/scans', data).then((response) => parseObjectResponse(response, '/scans', isScan));
+export const getScans = (brandId: number) =>
+  api.get<unknown>('/scans', { params: { brand_id: brandId } }).then((response) =>
+    parseArrayResponse(response, '/scans', isScan));
 
 export const getAlerts = (params: Record<string, number | string | undefined>) =>
-  api.get('/alerts', { params });
+  api.get<unknown>('/alerts', { params }).then((response) =>
+    parseArrayResponse(response, '/alerts', isAlert));
 export const getAlertsPaginated = (params: Record<string, number | string | undefined>) =>
   api.get('/alerts/paginated', { params });
 export const getAlert = (id: number) => api.get(`/alerts/${id}`);

@@ -22,7 +22,7 @@ import {
   OfficialAsset,
   AlertStatus
 } from './types';
-import { getMe } from './services/api';
+import { getMe, ApiResponseError, describeApiError } from './services/api';
 import { 
   getHealth, 
   getBrands, 
@@ -64,6 +64,7 @@ export default function App() {
   const [scanning, setScanning] = useState(false);
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
 
   const showToast = (msg: string) => {
@@ -98,7 +99,12 @@ export default function App() {
   // Sync with the API, selecting and refreshing the requested brand by ID.
   const syncPlatformData = useCallback(async (preferredBrandId?: number): Promise<Brand | null> => {
     try {
-      const healthRes = await getHealth().catch(() => null);
+      setDataError(null);
+      const healthRes = await getHealth().catch((err) => {
+        console.warn('Rakshak health check failed:', describeApiError(err));
+        setDataError(`Rakshak backend is unavailable. ${describeApiError(err)}`);
+        return null;
+      });
       const isHealthy = healthRes && (healthRes.data?.status === 'healthy' || healthRes.status === 200);
       setBackendHealthy(Boolean(isHealthy));
 
@@ -126,8 +132,13 @@ export default function App() {
       await refreshBrandData(current.id);
       return current;
     } catch (err) {
-      console.warn('Rakshak backend is unavailable; saved results could not be refreshed:', err);
+      const message = err instanceof ApiResponseError
+        ? `${err.message}. The backend response does not match the frontend contract.`
+        : `Saved results could not be refreshed. ${describeApiError(err)}`;
+      console.warn('Rakshak data refresh failed:', err);
       setBackendHealthy(false);
+      setDataError(message);
+      showToast(message);
       return null;
     }
   }, [refreshBrandData]);
@@ -467,6 +478,21 @@ export default function App() {
 
       <main className="lg:ml-64 p-4 sm:p-8">
         <div className="max-w-7xl mx-auto">
+          {dataError && (
+            <div className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div>
+                <p className="font-semibold">Saved data could not be loaded</p>
+                <p className="mt-1 text-xs">{dataError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setDataError(null); void syncPlatformData(); }}
+                className="shrink-0 rounded-md bg-amber-200 px-3 py-1.5 text-xs font-semibold hover:bg-amber-300"
+              >
+                Retry
+              </button>
+            </div>
+          )}
           <>
               {activeTab === 'overview' && (
                 <OverviewView
@@ -552,4 +578,46 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+class AppErrorBoundary extends React.Component<
+  React.PropsWithChildren,
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  handleRetry = () => {
+    this.setState({ error: null });
+  };
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen bg-slate-50 p-6 flex items-center justify-center">
+          <div className="max-w-lg rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm">
+            <h1 className="text-lg font-bold text-slate-900">Rakshak could not render this view</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              A server response did not match the expected data format. Your saved data was not replaced.
+            </p>
+            <button
+              type="button"
+              onClick={this.handleRetry}
+              className="mt-4 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function RootApp() {
+  return <AppErrorBoundary><App /></AppErrorBoundary>;
 }

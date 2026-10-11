@@ -3,6 +3,21 @@ from sqlalchemy import create_engine, inspect, text
 from app.migrations import migrate_schema
 
 
+def test_database_url_normalizes_render_postgres_schemes():
+    from app.database import normalize_database_url
+
+    assert normalize_database_url("postgres://user:pass@host/db") == (
+        "postgresql+psycopg://user:pass@host/db"
+    )
+    assert normalize_database_url("postgresql://user:pass@host/db") == (
+        "postgresql+psycopg://user:pass@host/db"
+    )
+    assert normalize_database_url("sqlite:///./rakshak.db") == "sqlite:///./rakshak.db"
+    assert normalize_database_url("postgresql+psycopg://user:pass@host/db") == (
+        "postgresql+psycopg://user:pass@host/db"
+    )
+
+
 def test_legacy_scan_rows_gain_nullable_result_counters_without_fabricated_zeros():
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as connection:

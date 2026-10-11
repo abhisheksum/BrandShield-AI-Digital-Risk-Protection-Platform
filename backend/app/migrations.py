@@ -1,4 +1,4 @@
-"""Small, additive SQLite compatibility migrations for existing installations."""
+"""Small, additive migrations compatible with SQLite and PostgreSQL."""
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine

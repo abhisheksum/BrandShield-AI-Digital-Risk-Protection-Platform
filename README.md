@@ -65,6 +65,43 @@ The root .env.example is for Docker Compose. Copy it to .env and set a private k
 
 For a cross-origin frontend, set CORS_ORIGINS to a JSON array of exact HTTPS origins. The API does not enable cookie credentials or wildcard origins.
 
+## Render production database setup
+
+Keep `DATABASE_URL` unset for local development; Rakshak then uses the checked-in
+`backend/rakshak.db` SQLite file. The backend accepts both Render's
+`postgres://...` URL and the newer `postgresql://...` form and selects the
+bundled `psycopg` driver automatically. Startup creates missing tables and
+applies only additive migrations; it does not replace or delete the local SQLite
+database.
+
+To run the backend on Render with persistent PostgreSQL storage:
+
+1. In the Render dashboard, create a **PostgreSQL** database in the same region
+   as the web service. Choose the plan and retention/backups appropriate for
+   production.
+2. Create a **Web Service** for this repository. If using the Docker runtime,
+   set the Dockerfile path to `backend/Dockerfile` and use the repository root
+   as the build context. Do not configure a release command that deletes or
+   recreates a database.
+3. In the web service's **Environment** settings, add `DATABASE_URL` by linking
+   it to the PostgreSQL database's **Internal Database URL**. Do not paste the
+   external URL when both services are on Render.
+4. Add a strong, stable random `SECRET_KEY` (at least 32 characters). Set
+   `CORS_ORIGINS` to a JSON array containing the exact deployed frontend HTTPS
+   origin, for example `["https://your-frontend.example"]`.
+5. Set the health check path to `/health`. The Dockerfile listens on Render's
+   `PORT` value when supplied and defaults to port `8000` locally.
+6. Deploy the web service manually from Render when you are ready. After it
+   starts, verify `/health`, registration, login, and one authenticated brand
+   request. The first startup creates the PostgreSQL schema; no SQLite migration
+   or automatic data transfer is performed.
+
+PostgreSQL persists relational application data, but Render's normal web-service
+filesystem is ephemeral. Keep `UPLOAD_DIR` on a Render persistent disk or move
+uploads to durable object storage before relying on uploaded logos in production.
+Do not delete `backend/rakshak.db`; it remains the local-development default and
+is not used when Render supplies `DATABASE_URL`.
+
 ## Docker deployment
 
 The included Compose setup builds the React app into Nginx and runs one non-root FastAPI worker. Nginx serves the UI and proxies /api, /uploads, and /health to the API. SQLite and uploads share the named rakshak_data volume. This single-instance SQLite deployment is appropriate for a small deployment; do not horizontally scale API containers or run multiple workers against this database. Use PostgreSQL and managed object storage before scaling.
